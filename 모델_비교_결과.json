@@ -1,0 +1,179 @@
+{
+  "project": "EU-Bot",
+  "experiment": "NB vs RF 의도 분류 모델 비교",
+  "data": {
+    "total_samples": 380,
+    "train_samples": 304,
+    "test_samples": 76,
+    "categories": [
+      "학칙/규정 일반",
+      "졸업 요건",
+      "장학금",
+      "수강 신청",
+      "학사 경고",
+      "기타",
+      "일정"
+    ],
+    "num_categories": 7,
+    "tfidf_features": 1070
+  },
+  "model_a_naive_bayes": {
+    "algorithm": "Multinomial Naive Bayes",
+    "hyperparameters": {
+      "alpha": 0.1
+    },
+    "accuracy": 0.8947,
+    "f1_macro": 0.7398,
+    "f1_weighted": 0.8698,
+    "cv_mean": 0.8621,
+    "cv_std": 0.0378,
+    "confusion_matrix": [
+      [
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        2
+      ],
+      [
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        46,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        3,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        0,
+        6,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        5
+      ]
+    ]
+  },
+  "model_b_random_forest": {
+    "algorithm": "Random Forest Classifier",
+    "hyperparameters": {
+      "n_estimators": 200,
+      "max_depth": "None"
+    },
+    "accuracy": 0.8026,
+    "f1_macro": 0.6601,
+    "f1_weighted": 0.7775,
+    "cv_mean": 0.7732,
+    "cv_std": 0.0326,
+    "confusion_matrix": [
+      [
+        1,
+        0,
+        2,
+        0,
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        3,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        46,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        2,
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        4,
+        0,
+        3,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0
+      ],
+      [
+        2,
+        0,
+        2,
+        0,
+        1,
+        0,
+        2
+      ]
+    ]
+  },
+  "conclusion": {
+    "accuracy_winner": "Naive Bayes",
+    "f1_winner": "Naive Bayes",
+    "selected_model": "Naive Bayes",
+    "reason": "Naive Bayes이(가) Accuracy 기준으로 더 높은 성능을 보여 최종 시스템에 채택"
+  }
+}
