@@ -20,7 +20,7 @@ from sentence_transformers import SentenceTransformer
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 JSON_CANDIDATES = [
-    "EU-Bot_청크_데이터 수정.json",
+    "EU-Bot_청크_데이터.json",
     
 ]
 
@@ -540,6 +540,10 @@ def answer_question(question):
         "answer": answer,
     }
 
+def strip_keyword_tag(text):
+    """키워드 태그 제거"""
+    return re.sub(r'\[키워드:.*?\]\s*', '', text)
+
 
 # =========================================================
 # 7. 실행
@@ -573,4 +577,4 @@ if __name__ == "__main__":
         print("예측 category:", result["category"])
         print("판별 방식:", result["method"], "/ 점수:", round(result["score"], 4))
         print("답변:")
-        print(result["answer"])
+        print(strip_keyword_tag(result["answer"]))
