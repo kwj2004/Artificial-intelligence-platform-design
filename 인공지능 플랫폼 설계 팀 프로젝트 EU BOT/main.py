@@ -6,7 +6,7 @@ from collections import Counter
 
 import numpy as np
 import pandas as pd
-from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
@@ -265,10 +265,14 @@ for rec in chunk_records:
     c = rec["chunk"]
     if clean_text(c.get("document")) != "교육과정":
         continue
-    if not clean_text(c.get("source_id")).startswith("교육과정_"):
+
+    sid = clean_text(c.get("source_id"))
+    if not (sid.startswith("교육과정_") or sid.startswith("통합_") or sid.startswith("과목_") or sid.startswith("졸업학점_")):
         continue
 
-    grade, semester, course_type = extract_grade_semester_course_type(c.get("article", ""))
+    grade, semester, course_type = extract_grade_semester_course_type(
+        c.get("article", "") + " " + c.get("title", "")
+    )
     if not grade:
         continue
 
@@ -280,6 +284,7 @@ for rec in chunk_records:
         "text": rec["text"],
         "title": rec["title"],
         "article": rec["article"],
+        "source_id": sid,
     })
 
 CURRICULUM_TYPE_ORDER = {
@@ -310,6 +315,22 @@ schedule_chunks = category_to_chunks.get("일정", [])
 # 학과정보 인덱스
 info_chunks = category_to_chunks.get("학과정보", [])
 
+# 과목명 → 카테고리 매핑 (과목명만 입력 시 자동 분류용)
+subject_to_category = {}
+for rec in chunk_records:
+    if not rec["category"].startswith("교육과정_"):
+        continue
+    # 청크 텍스트에서 과목명 추출 (따옴표 안)
+    subjects = extract_subjects_from_text(rec["text"])
+    for subj in subjects:
+        if len(subj) >= 2:
+            subject_to_category[subj] = rec["category"]
+    # article/title이 과목명인 경우
+    article = clean_text(rec.get("article", ""))
+    if article and "학년" not in article and "학기" not in article and "전체" not in article and "졸업" not in article:
+        if len(article) >= 2:
+            subject_to_category[article] = rec["category"]
+
 
 # =========================================================
 # 4. CSV 질문 리스트 기반 카테고리 분류 모델
@@ -317,7 +338,7 @@ info_chunks = category_to_chunks.get("학과정보", [])
 train_questions = [expand_aliases(q) for q in train_df["question"].tolist()]
 train_categories = [normalize_category_name(c) for c in train_df["category"].tolist()]
 
-category_vectorizer = CountVectorizer(token_pattern=r"(?u)\b\w+\b", ngram_range=(1, 2))
+category_vectorizer = TfidfVectorizer(token_pattern=r"(?u)\b\w+\b", ngram_range=(1, 2), max_features=5000, sublinear_tf=True)
 X_cat = category_vectorizer.fit_transform(train_questions)
 category_nb = MultinomialNB(alpha=0.1)
 category_nb.fit(X_cat, train_categories)
@@ -351,12 +372,36 @@ def predict_category(question):
 
     if contains_any(q, ["교수", "교수님", "연구실", "이메일", "연락처", "전화", "뜻", "줄임말", "뭐야"]):
         # 과목 뭐야는 교육과정으로 갈 수 있으니 과목명 직접 검색 전에만 사용
-        if not contains_any(q, ["교육과정", "과목", "수업", "전공필수", "전공선택"]):
+        if not contains_any(q, ["교육과정", "과목", "수업", "전공필수", "전공선택", "전필", "전선", "학년", "학기", "커리큘럼", "졸업", "학점"]):
             return "학과정보", 1.0, "rule"
 
+    # 6. 교육과정 질문 처리
     cur_cat = infer_curriculum_category(q)
     if cur_cat:
-        return cur_cat, 1.0, "rule"
+        return cur_cat, 1.0, "rule-curriculum"
+
+    # 6-1. 교육과정 관련 키워드가 있는데 학과명이 없으면 모호함
+    curriculum_keywords = [
+        "학년", "학기", "전필", "전선", "전공필수", "전공선택", "전공기초",
+        "교양필수", "교양선택", "커리큘럼", "교육과정", "과목",
+        "몇 학점", "P/F", "GRADE", "이론", "실습", "수업",
+        "졸업 학점", "졸업학점", "이수", "시간표",
+    ]
+    dept_keywords = [
+        "의아", "의료IT", "의료아이티", "빅융", "빅데이터의료융합",
+        "빅인", "빅데이터인공지능", "첨단", "첨단학부",
+        "스의정", "스마트의료정보",
+        "22학번", "24학번", "25학번", "26학번",
+        "22교육과정", "24교육과정", "26교육과정", "현행",
+    ]
+    if contains_any(q, curriculum_keywords) and not contains_any(q, dept_keywords):
+        return "모호함", 0.0, "rule-no-dept-curriculum"
+
+    # 6-2. 과목명만 입력한 경우 해당 교육과정으로 분류
+    q_compact = compact(q)
+    for subj, cat in sorted(subject_to_category.items(), key=lambda x: len(x[0]), reverse=True):
+        if compact(subj) in q_compact:
+            return cat, 0.9, "rule-subject-name"
 
     # NB 분류
     x = category_vectorizer.transform([q])
@@ -393,6 +438,12 @@ def answer_curriculum(question, category):
             continue
         matched.append(row)
 
+    # 이수구분 없이 질문하면 통합 청크(전체 과목)를 우선 반환
+    if matched and not course_type:
+        unified = [r for r in matched if "통합_" in r.get("source_id", "") or "전체 과목" in r.get("article", "")]
+        if unified:
+            matched = unified
+
     # 전공필수/전공선택을 묻지 않고 학년만 물으면 해당 학년 전체 출력
     if matched:
         matched.sort(key=lambda r: (
@@ -418,7 +469,7 @@ def answer_curriculum(question, category):
 
         lines = [f"[{head} {' '.join(detail)} 교육과정]"]
         for row in matched:
-            lines.append(f"- {row['semester']}학기 {row['course_type']}: {row['text']}")
+            lines.append(f"- {row['text']}")
         return "\n".join(lines)
 
     # 요약 매칭 실패 시 해당 category 내 semantic 검색
@@ -494,7 +545,7 @@ def answer_graduation(question):
     return semantic_chunk_answer(question, category_filter="졸업인증")
 
 
-def semantic_chunk_answer(question, category_filter=""):
+def semantic_chunk_answer(question, category_filter="", top_k=3):
     q = expand_aliases(question)
 
     indices = list(range(len(chunk_records)))
@@ -506,21 +557,50 @@ def semantic_chunk_answer(question, category_filter=""):
 
     emb = model.encode([q], convert_to_numpy=True, show_progress_bar=False)
     sims = cosine_similarity(emb, chunk_embeddings[indices])[0]
-    local_best = int(np.argmax(sims))
-    best_i = indices[local_best]
-    score = float(sims[local_best])
-    rec = chunk_records[best_i]
 
-    if score < 0.32:
-        return "질문이 너무 모호합니다. 학과명, 학년/학기, 과목명, 일정명 등을 조금 더 구체적으로 입력해주세요."
+    top_indices = np.argsort(sims)[::-1][:top_k]
+    best_score = float(sims[top_indices[0]])
 
-    return rec["text"]
+    # 카테고리 필터 검색 결과가 너무 낮으면 전체에서 재검색
+    if best_score < 0.35 and category_filter:
+        all_indices = list(range(len(chunk_records)))
+        all_sims = cosine_similarity(emb, chunk_embeddings[all_indices])[0]
+        top_indices_all = np.argsort(all_sims)[::-1][:top_k]
+        best_score_all = float(all_sims[top_indices_all[0]])
+
+        if best_score_all > best_score:
+            indices = all_indices
+            sims = all_sims
+            top_indices = top_indices_all
+            best_score = best_score_all
+
+    if best_score < 0.30:
+        return "관련 정보를 정확히 찾지 못했습니다. 학과명, 학년/학기, 과목명, 일정명 등을 조금 더 구체적으로 입력해주세요."
+
+    results = []
+    for idx in top_indices:
+        real_idx = indices[idx]
+        score = float(sims[idx])
+        if score >= 0.25:
+            results.append(chunk_records[real_idx]["text"])
+
+    return "\n\n".join(results) if results else chunk_records[indices[top_indices[0]]]["text"]
 
 
 def answer_question(question):
     category, score, method = predict_category(question)
 
-    if category.startswith("교육과정_"):
+    if category == "모호함":
+        answer = (
+            "질문이 조금 모호합니다. "
+            "어떤 교육과정인지 알려주세요!\n"
+            "- 의아 (의료IT학과 22교육과정)\n"
+            "- 빅융 (빅데이터의료융합 22교육과정)\n"
+            "- 스의정 (스마트의료정보학부 24교육과정)\n"
+            "- 첨단 (첨단학부 빅데이터인공지능 현행 26교육과정)\n"
+            "예: '첨단 3학년 1학기 전필 알려줘'"
+        )
+    elif category.startswith("교육과정_"):
         answer = answer_curriculum(question, category)
     elif category == "대체과목":
         answer = answer_replacement(question)
